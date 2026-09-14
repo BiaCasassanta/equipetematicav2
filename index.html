@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Prévia — Roteiro do Juizinho (Versão B — por tese)</title>
+<title>Prévia — Roteiro do Juizinho (Equipe Temática)</title>
 <style>
   :root{
     --ink:#1c2430; --paper:#fdfcfa; --line:#dcd6c9; --accent:#8a6d3b; --accent-soft:#f3ede0;
@@ -91,8 +91,8 @@
 <body>
 <div class="wrap">
   <header class="top">
-    <h1>Prévia — Roteiro do Juizinho (Versão B — por tese)</h1>
-    <p>Lista as teses do recurso e, para cada uma, deixa marcar quais óbices incidem — em vez de perguntar óbice por óbice em sequência. Mesmos textos prontos da Versão A.</p>
+    <h1>Prévia — Roteiro do Juizinho (Equipe Temática)</h1>
+    <p>Pergunta EDs e alínea logo no início, confere os óbices com despacho pronto, e só pede ementa/tese/contrarrazões se nenhum modelo específico servir.</p>
   </header>
   <div class="banner">
     <b>Isto é uma prévia, não a ferramenta final.</b>
@@ -115,9 +115,9 @@
   let tesesText = '';
   let artigosViolados = ''; // pedido de Bia (14/09/2026): campo opcional pra listar os artigos de lei federal apontados como violados, usado no parágrafo de abertura ("negativa de vigência aos artigos ___")
   // núcleo fático-jurídico resumido das teses, pronto pra entrar no parágrafo de abertura — começa igual a
-  // tesesText/formatarListaPt (fallback determinístico) e pode ser substituído por uma versão mais fluida
-  // via tentarResumoSinteticoIA (evolução do antigo tentarResumoTesesIA, agora seguindo o "nosso padrão"
-  // completo), com o mesmo fallback silencioso de sempre.
+  // tesesText (fallback determinístico) e pode ser substituído por uma versão mais fluida via
+  // tentarResumoSinteticoIA (mesmo padrão de fallback silencioso do tentarConectivosIA: sem IA disponível,
+  // fica exatamente como o triador escreveu).
   let resumoNucleo = '';
   let contrarrazoes = null;   // 'sim' | 'nao'
   let art489Aplicavel = false; // true = a alegação de violação aos arts. 489/1.022 foi rejeitada e entra no despacho
@@ -148,8 +148,9 @@
   const ALINEA_C_BLOQUEADA = "O mesmo óbice, consabidamente, aplica-se à alegada divergência jurisprudencial, impedindo, igualmente, o processamento do inconformismo fundado na alínea \"c\", diante da ausência de identidade entre os paradigmas apresentados e os fundamentos do acórdão recorrido.";
   const OPENER = 'Trata-se de recurso especial interposto contra acórdão proferido por este Tribunal.';
   const CLOSER = 'Diante do exposto, inadmito o recurso especial, com fundamento no artigo 1.030, inciso V, do Código de Processo Civil.\nIntimem-se.';
-  // pedido de Bia (14/09/2026, 2ª rodada de testes): quando há efeito suspensivo pendente no despacho, o
-  // fecho precisa indeferir esse pedido explicitamente, não só mencionar que ficou prejudicado no corpo.
+  // pedido de Bia (14/09/2026, 2ª rodada de testes): quando há pedido de efeito suspensivo pendente no
+  // mesmo despacho (cascata), o fecho precisa indeferir esse pedido explicitamente, não só mencionar que
+  // ficou prejudicado no corpo do texto — usado em vez de CLOSER sempre que efeitoSuspensivoAplicavel.
   const CLOSER_COM_EFEITO_SUSPENSIVO = 'Diante do exposto, inadmito o recurso especial, com fundamento no artigo 1.030, inciso V, do Código de Processo Civil, e indefiro o pedido de concessão de efeito suspensivo.\nIntimem-se.';
   const CLOSER_ADMISSAO = 'Diante do exposto, com fundamento no artigo 1.030, inciso V, alínea "a", do Código de Processo Civil, ADMITO o recurso.\nIntimem-se.';
   // fecho de NEGATIVA DE SEGUIMENTO (art. 1.030, I, CPC) — distinto de inadmissão (art. 1.030, V).
@@ -325,40 +326,63 @@
     return corpo.replace(/\s+$/, '');
   }
 
-  // ---- Versão B (11/09/2026): em vez de perguntar óbice por óbice em sequência, primeiro lista as teses
-  // do recurso e depois, PARA CADA TESE, mostra um checklist com todos os óbices de mérito pra marcar
-  // quais incidem naquela tese específica — pedido de Bia: "perguntaria as teses e depois apresentaria:
-  // tese a incide quais óbices?". `teses` guarda só o rótulo de cada uma; os pontos que efetivamente
-  // incidiram (entries prontas pra montagem, já com `.teseLabel`) ficam em `teseChecklistPontos`.
-  let teses = []; // [{ label: 'tese x' }, ...]
-  let teseChecklistPontos = []; // entries já processadas (todas com .teseLabel), na ordem em que foram marcadas
+  // Acumulador da cascata: cada ponto que incide, ao longo do roteiro, entra aqui (em vez de finalizar o
+  // despacho na hora) e o roteiro CONTINUA pelos óbices restantes. A montagem final (montarCascataFinal)
+  // decide o desfecho: 0 pontos -> esqueleto genérico; 1 ponto isolado (sem 489/efeito suspensivo
+  // combinado) -> preserva o despacho pronto de sempre (finishStandalone/finishComEmenta, sem mudança
+  // nenhuma); 2+ pontos, ou 1 ponto + modificador -> monta o despacho combinado, com cabeçalho
+  // compartilhado, transições fixas e fecho único.
+  let cascataPontos = [];
+  function empilharCascata(entry){ cascataPontos.push(entry); }
 
-  // Itens do checklist — cada um mapeia pra um óbice do roteiro original (mesmos textos/súmulas de
-  // sempre). "extra": tipo de campo adicional que aparece quando o item é marcado.
-  const CHECKLIST_ITENS = [
-    { id: 'materia_constitucional', label: 'Matéria constitucional autônoma dentro do REsp', ajuda: 'O recurso também alega, entre seus fundamentos, ofensa a dispositivo constitucional (STJ não pode examinar).', extra: null },
-    { id: 'art489', label: 'Nulidade dos arts. 489/1.022, CPC (ausência de fundamentação/omissão)', ajuda: 'A parte alega violação aos arts. 489/1.022, CPC, e o acórdão está de fato claro e fundamentado.', extra: null },
-    { id: 'dissidio_ideologico', label: 'Dissídio ideológico / deficiência de fundamentação (divórcio do acórdão)', ajuda: 'Fundamentação genérica/deficiente, ou o recurso ataca ponto que o acórdão não tratou.', extra: 'cotejo' },
-    { id: 'fundamento_inatacado', label: 'Fundamento autônomo não impugnado (Súmula 283/STF)', ajuda: 'O acórdão tem mais de um fundamento suficiente, e o recurso deixou de impugnar algum deles.', extra: 'fundamento' },
-    { id: 'sumula_126', label: 'Fundamento constitucional autônomo sem RE (Súmula 126/STJ)', ajuda: 'Fundamentação dúplice (constitucional + infraconstitucional) sem recurso extraordinário contra a parte constitucional.', extra: null },
-    { id: 'reexame_prova', label: 'Reexame de prova/cláusula contratual (Súmulas 5, 7/STJ e 279/STF)', ajuda: 'Para dar provimento seria preciso reexaminar provas ou reinterpretar cláusulas contratuais.', extra: null },
-    { id: 'norma_infralegal', label: 'Fundamento em norma infralegal (não é "lei federal")', ajuda: 'O fundamento do acórdão é resolução/portaria/instrução normativa, não lei federal.', extra: null },
-    { id: 'prequestionamento', label: 'Ausência de prequestionamento', ajuda: 'O dispositivo apontado como violado não foi objeto de decisão explícita no acórdão.', extra: 'prequestionamento' },
-    { id: 'sumula_83', label: 'Conformidade com jurisprudência dominante do STJ (Súmula 83)', ajuda: 'O entendimento do acórdão está em consonância com a jurisprudência do STJ — deixe a pesquisa aberta abaixo se marcar este item.', extra: 'sumula83' }
-  ];
-  function findSeqStep(id){ return SUMULA_SEQUENCE.find(s => s.id === id); }
+  // Dispara a pergunta "é tese única?" para um ponto que acabou de incidir. `nextFn` é chamado quando a
+  // resposta é "não" (depois de coletar o rótulo da tese) — quando é "sim", o roteiro pula direto pro
+  // efeito suspensivo, ignorando `nextFn` (não há mais nada a checar).
+  function perguntarTeseUnica(entry, nextFn){
+    teseUnicaPendingEntry = entry;
+    teseUnicaPendingNext = nextFn;
+    // já confirmamos antes que há múltiplas teses — pula direto pro campo livre, sem perguntar de novo.
+    if(multiplasTesesConfirmado) return goTo('tese_unica_label');
+    return goTo('tese_unica_ponto');
+  }
 
-  // Monta o parágrafo único do fundamento inatacado (Súmula 283) quando incide em 2+ teses, listando os
-  // vários fundamentos não impugnados em vez de repetir o parágrafo+citação inteiros por tese (pedido de
-  // Bia 14/09/2026, 5ª rodada: "não é para repetir também não. Pode colocar, o recurso não atacou tais e
-  // tais fundamentos"). Reaproveita a citação/súmula (2º parágrafo em diante) do texto original, verbatim.
-  function construirCorpoFundamentoMerged(fundamentos){
-    const step = findSeqStep('fundamento_inatacado');
-    const frases = fundamentos.map(f => 'no sentido de que ' + (f || XXXXXXX));
-    const primeiraLinha = 'As razões do recurso especial, contudo, deixam de impugnar especificamente os fundamentos adotados pelo Colegiado, ' + formatarListaPt(frases) + ', circunstâncias suficientes, por si só, para a manutenção do julgado quanto a esses pontos. Incide, no ponto, por analogia, o óbice da Súmula 283 do Supremo Tribunal Federal.';
-    const nl = step.texto.indexOf('\n');
-    const restante = nl >= 0 ? step.texto.slice(nl) : '';
-    return primeiraLinha + restante;
+  // ---- ordem de perguntar ementa/tese/CR (pedido de Bia em 10/09/2026): primeiro checamos todos os
+  // óbices de "despacho resumido" (standalone — não precisam de ementa); se nenhum incidir, SÓ ENTÃO
+  // pedimos ementa/tese/contrarrazões; depois checamos os óbices que precisam de "decisão completa"
+  // (fragment — prequestionamento, súmula 283, súmula 5/7/279), já com ementa/tese prontas; por fim
+  // súmula 83 (pesquisa STJ), que também usa a decisão completa. Isso substitui a navegação linear
+  // idx+1 de antes, que intercalava standalone e fragment na ordem do documento original.
+  // pedido de Bia (11/09/2026, 5ª rodada): ordem fixa dos óbices "standalone" no roteiro — kill switches
+  // primeiro (inesgotamento, liminar), depois os óbices de mérito na ordem que ela pediu (dissídio,
+  // inépcia/norma infralegal, fundamento constitucional/súmula 126). Ordem explícita por id, em vez de
+  // seguir a ordem física do array SUMULA_SEQUENCE, pra não precisar mover os textos grandes de lugar.
+  const STANDALONE_ORDER_IDS = ['inesgotamento', 'liminar', 'dissidio_ideologico', 'norma_infralegal', 'sumula_126'];
+  const STANDALONE_CHAIN = STANDALONE_ORDER_IDS.map(id => SUMULA_SEQUENCE.findIndex(s => s.id === id));
+  const FRAGMENT_CHAIN = SUMULA_SEQUENCE.map((s, i) => i).filter(i => SUMULA_SEQUENCE[i].kind === 'fragment');
+  function nextInChain(chain, currentIdx){
+    const pos = chain.indexOf(currentIdx);
+    return (pos >= 0 && pos + 1 < chain.length) ? chain[pos + 1] : null;
+  }
+  // Avança para o próximo óbice da MESMA fase (standalone ou fragment); ao fim de cada fase, segue
+  // para o próximo passo do roteiro (ementa, ao fim da fase standalone; pesquisa_stj, ao fim da fase
+  // fragment).
+  function goToNextObice(idx){
+    const kind = SUMULA_SEQUENCE[idx].kind;
+    if(kind === 'standalone'){
+      // pedido de Bia (11/09/2026, 5ª rodada): logo depois dos 2 kill switches (inesgotamento, liminar —
+      // posições 0 e 1 de STANDALONE_CHAIN), intercala matéria constitucional + 489/1.022 antes de retomar
+      // os óbices de mérito restantes da cadeia (dissídio, inépcia, súmula 126).
+      if(STANDALONE_CHAIN.indexOf(idx) === 1) return goTo('materia_constitucional');
+      const next = nextInChain(STANDALONE_CHAIN, idx);
+      return next !== null ? goTo('sumula_' + next) : goTo('ementa');
+    }
+    const next = nextInChain(FRAGMENT_CHAIN, idx);
+    return next !== null ? goTo('sumula_' + next) : goTo('pesquisa_stj');
+  }
+  // depois de matéria constitucional + 489/1.022 (intercalados entre os kill switches e o restante da
+  // cadeia standalone), retoma a cadeia na posição 2 (dissídio ideológico) — pedido de Bia 11/09/2026.
+  function resumirAposArt489(){
+    return goTo('sumula_' + STANDALONE_CHAIN[2]);
   }
 
   // ---- "pular para pergunta" (pedido de Bia 11/09/2026): às vezes ela já sabe de cara que há precedente
@@ -371,12 +395,14 @@
     { step: 'abertura', label: 'Peça/CR/acórdão conferidos' },
     { step: 'eds', label: 'Embargos de declaração' },
     { step: 'alinea', label: 'Alínea do art. 105, III' },
-    { step: 'sumula_0', label: 'Inesgotamento de instância' },
-    { step: 'sumula_1', label: 'Recurso contra decisão liminar' },
-    { step: 'precedente_favoravel', label: 'Precedente favorável (antes das teses)' },
-    { step: 'lista_teses', label: 'Lista de teses do recurso' },
+    { step: 'materia_constitucional', label: 'Matéria constitucional autônoma' },
+    { step: 'art489_1022', label: '489 e 1.022, CPC' },
     { step: 'ementa', label: 'Ementa do acórdão' },
+    { step: 'teses', label: 'Teses recursais' },
+    { step: 'artigos', label: 'Artigos de lei federal violados' },
     { step: 'contrarrazoes', label: 'Contrarrazões' },
+    ...SUMULA_SEQUENCE.map((s, i) => ({ step: 'sumula_' + i, label: s.pergunta.slice(0, 60) + (s.pergunta.length > 60 ? '…' : '') })),
+    { step: 'pesquisa_stj', label: 'Pesquisa STJ (súmula 83)' },
     { step: 'efeito_suspensivo', label: 'Efeito suspensivo' }
   ];
   function jumpNavHTML(){
@@ -570,27 +596,27 @@
     }
   }
 
-  // pedido de Bia (14/09/2026, "nosso padrão" — confirmado): dentro do checklist combinado (2+ teses/
-  // pontos), em vez de só inserir uma frase de transição livre entre blocos (como o tentarConectivosIA
-  // acima faz nos despachos de tese única), aqui a IA ESCOLHE, pra cada bloco que já tem mais de uma
-  // abertura possível dentre as JÁ APROVADAS por ela (conectores fixos de continuidade — Ademais/Além
+  // pedido de Bia (14/09/2026, "nosso padrão" — confirmado): dentro da CASCATA (2+ pontos combinados), em
+  // vez de só inserir uma frase de transição livre entre blocos (como o tentarConectivosIA acima faz nos
+  // despachos de ponto único), aqui a IA ESCOLHE, pra cada bloco que já tem mais de uma abertura possível
+  // dentre as JÁ APROVADAS por ela (os conectores fixos de sempre — Ademais/Lado outro/Noutro passo/Além
   // disso/De outro lado — e, só quando a tese não foi mesclada, a variação "No tocante à tese de que ___,
-  // observa-se que ___", útil segundo ela quando há muitas teses com fundamentações diferentes), qual
-  // delas flui melhor com o bloco anterior. NUNCA escreve texto novo, só seleciona entre as opções
+  // observa-se que ___", que ela descreveu como útil quando há muitas teses com fundamentações diferentes),
+  // qual delas flui melhor com o bloco anterior. NUNCA escreve texto novo, só seleciona entre as opções
   // fornecidas (a opção [0] de cada lista é sempre a determinística de sempre). Fallback: sem IA
   // disponível/consentida/erro, cada bloco fica com essa opção determinística — funciona 100% sem IA.
-  // Mesmo mecanismo da Versão A (tentarEscolherConectivosCascataIA), duplicado aqui pelo mesmo motivo dos
-  // outros helpers (formatarListaPt, rotuloQuantoA): cada Artifact é um arquivo HTML independente.
-  let iaChecklistConectorSeq = 0;
-  async function tentarEscolherConectivosChecklistIA(partesArr, escolhasArr, cabecalho, fechamento){
+  let iaCascataConectorSeq = 0;
+  async function tentarEscolherConectivosCascataIA(partesArr, escolhasArr, cabecalho, fechamento){
     const indices = [];
     escolhasArr.forEach((op, i) => { if(op) indices.push(i); });
     if(!indices.length) return;
     if(typeof window === 'undefined' || !window.claude || typeof window.claude.use !== 'function') return;
-    const minhaSeq = ++iaChecklistConectorSeq;
+    const minhaSeq = ++iaCascataConectorSeq;
     try {
       const sample = await window.claude.use('sample');
-      if(!sample || minhaSeq !== iaChecklistConectorSeq || !final) return;
+      if(!sample || minhaSeq !== iaCascataConectorSeq || !final) return;
+      // previews curtos (não o texto jurídico inteiro) — só pra avaliar fluidez entre blocos vizinhos,
+      // economizando tokens (pedido dela: contas gratuitas não podem gastar muito).
       const preview = (s) => { const t = s.replace(/\s+/g, ' ').trim(); return t.length > 140 ? t.slice(0, 140) + '…' : t; };
       const blocosPreview = partesArr.map((p, i) => (i + 1) + '. ' + preview(p)).join('\n');
       const opcoesTexto = indices.map(i => {
@@ -599,7 +625,7 @@
       }).join('\n');
       const prompt = 'Você vai receber, em prévia resumida, a sequência de blocos de um despacho judicial brasileiro (admissibilidade de recurso especial/extraordinário) já pronto. Alguns blocos têm mais de uma opção de ABERTURA (conector já aprovado, nunca texto novo) — escolha, pra cada um desses blocos, a opção cuja abertura flui melhor considerando o bloco anterior, evitando repetir o mesmo conector em blocos vizinhos.\n\nResponda SOMENTE com um array JSON de ' + indices.length + ' letras (uma por bloco com opções, na ordem listada), cada uma sendo a letra da opção escolhida.\n\nSequência de blocos:\n' + blocosPreview + '\n\nBlocos com opções:\n' + opcoesTexto;
       const escolhidas = await sample.json(prompt, { modelTier: 'quick' });
-      if(minhaSeq !== iaChecklistConectorSeq || !final) return;
+      if(minhaSeq !== iaCascataConectorSeq || !final) return;
       if(!Array.isArray(escolhidas) || escolhidas.length !== indices.length) return;
       const novasPartes = partesArr.slice();
       let ok = true;
@@ -615,35 +641,34 @@
       final.iaStatus = 'aplicado';
       render();
     } catch(e){
-      if(final && minhaSeq === iaChecklistConectorSeq) final.iaStatus = 'indisponivel';
+      if(final && minhaSeq === iaCascataConectorSeq) final.iaStatus = 'indisponivel';
     }
   }
 
   // pedido de Bia (14/09/2026, "nosso padrão"): deixar o núcleo do parágrafo de abertura ("Assevera o
-  // recorrente, em síntese, que ___") mais fluido a partir dos rótulos curtos das teses que o triador
-  // digitou — frases curtas, sem gerúndio, sem repetições. NUNCA inventa fundamento/artigo/fato novo — só
-  // reescreve o que já foi informado. Substitui o antigo tentarResumoTesesIA (que só fazia uma paráfrase
-  // gramatical da lista de rótulos); agora produz o núcleo completo no mesmo padrão da Versão A. Mesmo
-  // fallback silencioso de sempre: sem consentimento/indisponível/erro, resumoNucleo continua sendo a
-  // junção determinística de formatarListaPt (já atribuída como fallback no próprio passo do roteiro).
+  // recorrente, em síntese, que ___") mais fluido — frases curtas, sem gerúndio, sem repetições — a
+  // partir do que o(a) assessor(a) escreveu no passo "teses" (prosa livre ou rótulos curtos). NUNCA
+  // inventa fundamento/artigo/fato novo — só reescreve o que já foi informado. Mesmo padrão de fallback
+  // silencioso do tentarConectivosIA: sem consentimento/indisponível/erro, resumoNucleo continua sendo
+  // exatamente o texto que o triador digitou (já atribuído como fallback no próprio passo do roteiro).
   let iaResumoSeq = 0;
-  async function tentarResumoSinteticoIA(labels){
-    const base = formatarListaPt(labels || []);
+  async function tentarResumoSinteticoIA(){
+    const base = (tesesText || '').trim();
     if(!base) return;
     if(typeof window === 'undefined' || !window.claude || typeof window.claude.use !== 'function') return;
     const minhaSeq = ++iaResumoSeq;
     try {
       const sample = await window.claude.use('sample');
       if(!sample || minhaSeq !== iaResumoSeq) return;
-      const prompt = 'Você vai ajudar a deixar mais fluido o núcleo de um parágrafo de abertura de um despacho judicial brasileiro (admissibilidade de recurso especial/extraordinário). Vai receber, abaixo, os rótulos curtos das teses/fundamentos do recurso, do jeito que o(a) assessor(a) digitou (podem vir abreviados).\n\nSua única tarefa: reescrever essa lista como UM único parágrafo corrido, claro e conciso, com frases curtas, evitando gerúndio, sintetizando de forma bem resumida TODAS as teses recebidas — sem omitir nenhuma, sem inventar nenhum fundamento, artigo ou fato que não esteja nos rótulos, e sem repetições desnecessárias. Esse texto vai entrar diretamente depois de "Assevera o recorrente, em síntese, que ___." — não repita essa abertura, não termine com ponto final, não use aspas.\n\nResponda SOMENTE com o parágrafo, sem comentários.\n\nRótulos:\n' + labels.map((l, i) => (i + 1) + '. ' + l).join('\n');
+      const prompt = 'Você vai ajudar a deixar mais fluido o núcleo de um parágrafo de abertura de um despacho judicial brasileiro (admissibilidade de recurso especial/extraordinário). Vai receber, abaixo, o texto em que o(a) assessor(a) descreveu as teses/fundamentos do recurso, do jeito que anotou (pode já estar em prosa, ou ser só uma lista curta de rótulos).\n\nSua única tarefa: reescrever esse texto como UM único parágrafo corrido, claro e conciso, com frases curtas, evitando gerúndio, sintetizando de forma bem resumida TODAS as teses recebidas — sem omitir nenhuma, sem inventar nenhum fundamento, artigo ou fato que não esteja no texto recebido, e sem repetições desnecessárias. Esse texto vai entrar diretamente depois de "Assevera o recorrente, em síntese, que ___." — não repita essa abertura, não termine com ponto final, não use aspas.\n\nResponda SOMENTE com o parágrafo, sem comentários.\n\nTexto recebido:\n' + base;
       const resultado = await sample(prompt, { modelTier: 'quick' });
       if(minhaSeq !== iaResumoSeq || !resultado || !resultado.text) return;
       const texto = resultado.text.trim().replace(/^["“]+|["”]+$/g, '').replace(/\.+$/, '');
       if(!texto || texto.length > 600) return; // resposta vazia/fora do razoável: mantém o texto original
       resumoNucleo = texto;
     } catch(e){
-      // sem consentimento, limite de uso, ou qualquer outra falha: resumoNucleo continua a junção
-      // determinística de formatarListaPt — a ferramenta funciona 100% sem a IA, como sempre funcionou.
+      // sem consentimento, limite de uso, ou qualquer outra falha: resumoNucleo continua = tesesText,
+      // que já foi atribuído como fallback determinístico no passo do roteiro — funciona 100% sem IA.
     }
   }
 
@@ -695,18 +720,25 @@
     if(currentStep === 'abertura') return renderAbertura();
     if(currentStep === 'eds') return renderEds();
     if(currentStep === 'alinea') return renderAlinea();
-    // idx 0 = inesgotamento (281), idx 1 = liminar (735) — únicos 2 óbices que continuam sendo
-    // perguntados globalmente, ANTES da lista de teses: são barreiras processuais absolutas, que
-    // independem de qual tese específica está em jogo (Versão B, 11/09/2026).
+    if(currentStep === 'materia_constitucional') return renderMateriaConstitucional();
+    if(currentStep === 'art489_1022') return renderArt489();
+    if(currentStep === 'art489_tese_unica') return renderArt489TeseUnica();
+    if(currentStep === 'tese_unica_ponto') return renderTeseUnicaPonto();
+    if(currentStep === 'tese_unica_label') return renderTeseUnicaLabel();
+    if(currentStep === 'ementa') return renderTextarea('ementa', 'Cole a ementa do acórdão recorrido', 'Ementa (copie e cole aqui)', ementaText, (v) => { ementaText = v; }, 'teses');
+    if(currentStep === 'teses') return renderTextarea('teses', 'Quais teses a parte recorrente sustenta nas razões do recurso?', 'Resumo das teses (o texto entra em "asseverando a parte recorrente, em síntese, que ___")', tesesText, (v) => { tesesText = v; resumoNucleo = v.trim(); }, 'artigos');
+    // pedido de Bia (14/09/2026): campo opcional pra listar os artigos de lei federal apontados como
+    // violados, usado no parágrafo de abertura ("negativa de vigência aos artigos ___") — dispara a
+    // tentativa de deixar o núcleo das teses mais fluido (tentarResumoSinteticoIA) assim que sai daqui,
+    // já com teses+artigos+alínea (dissídio) conhecidos.
+    if(currentStep === 'artigos') return renderTextarea('artigos', 'Quais artigos de lei federal foram apontados como violados? (opcional)', 'Ex.: arts. 186 e 927 do Código Civil — deixe em branco se preferir não listar', artigosViolados, (v) => { artigosViolados = v; tentarResumoSinteticoIA(); }, 'contrarrazoes');
+    if(currentStep === 'contrarrazoes') return renderContrarrazoes();
+    if(currentStep === 'cotejo_analitico') return renderCotejoAnalitico();
     if(currentStep && currentStep.startsWith('sumula_')) return renderSumulaStep(currentStep.replace('sumula_',''));
     if(currentStep === 'excecao_liminar') return renderExcecaoLiminar();
-    if(currentStep === 'precedente_favoravel') return renderPrecedenteFavoravel();
-    if(currentStep === 'precedente_favoravel_colar') return renderPrecedenteFavoravelColar();
-    if(currentStep === 'lista_teses') return renderListaTeses();
-    if(currentStep && currentStep.startsWith('tese_checklist_')) return renderTeseChecklist(parseInt(currentStep.replace('tese_checklist_',''), 10));
-    if(currentStep === 'ementa') return renderTextarea('ementa', 'Cole a ementa do acórdão recorrido', 'Ementa (copie e cole aqui)', ementaText, (v) => { ementaText = v; }, 'contrarrazoes');
-    if(currentStep === 'contrarrazoes') return renderContrarrazoes();
     if(currentStep === 'prequestionamento_variante') return renderPrequestionamentoVariante();
+    if(currentStep === 'pesquisa_stj') return renderPesquisaStj();
+    if(currentStep === 'pesquisa_stj_colar') return renderPesquisaStjColar();
     if(currentStep === 'efeito_suspensivo') return renderEfeitoSuspensivo();
   }
 
@@ -1056,7 +1088,145 @@
     wireChoices('alinea', (v) => {
       alinea = v;
       record('alinea', 'Alínea do art. 105, III, CF', v === 'ambas' ? 'a e c' : v);
-      return goTo('sumula_0');
+      // pedido de Bia (11/09/2026, 5ª rodada): inesgotamento e liminar (kill switches) agora vêm logo
+      // depois da alínea, antes de matéria constitucional/489 — ver goToNextObice.
+      return goTo('sumula_' + STANDALONE_CHAIN[0]);
+    });
+    wireBack();
+  }
+
+  function renderMateriaConstitucional(){
+    activeEl.innerHTML = `
+      ${stepperHTML()}
+      ${materiaTag()}
+      <div class="qcard">
+        <p class="qtext">O recurso especial também alega, entre seus fundamentos, ofensa a dispositivo constitucional (matéria constitucional arguida dentro do próprio recurso especial — não se trata de recurso extraordinário autônomo)?</p>
+        <p class="qhelp">O Superior Tribunal de Justiça não pode examinar ofensa a dispositivo constitucional — é competência exclusiva do Supremo Tribunal Federal. Responda "Sim" só quanto a essa alegação específica; os demais fundamentos do recurso continuam sendo avaliados normalmente nas próximas perguntas.</p>
+        <div class="choices">
+          <button type="button" class="choice-btn" data-v="sim">Sim, há alegação de ofensa a dispositivo constitucional</button>
+          <button type="button" class="choice-btn" data-v="nao">Não</button>
+        </div>
+        ${backRow()}
+      </div>`;
+    wireChoices('materia_constitucional', (v) => {
+      materiaConstitucionalAplicavel = (v === 'sim');
+      record('materia_constitucional', 'Há alegação de ofensa a dispositivo constitucional dentro do REsp?', v === 'sim' ? 'Sim (STJ não pode examinar — ponto incluído no despacho)' : 'Não');
+      if(v === 'sim'){
+        const entry = { id: 'materia_constitucional', priority: PRIORIDADE_CASCATA.materia_constitucional, titulo: 'Matéria constitucional — incompetência do STJ', sumula: null, crossRef: null, kind: 'fragment', textoLegacy: MATERIA_CONSTITUCIONAL_TEXTO, addendaLegacy: [], ignoraArt489: false, corpo: MATERIA_CONSTITUCIONAL_TEXTO };
+        return perguntarTeseUnica(entry, () => goTo('art489_1022'));
+      }
+      return goTo('art489_1022');
+    });
+    wireBack();
+  }
+
+  function renderArt489(){
+    activeEl.innerHTML = `
+      ${stepperHTML()}
+      ${materiaTag()}
+      <div class="qcard">
+        <p class="qtext">A parte alega, entre os fundamentos do recurso, violação aos artigos 489 e 1.022 do CPC (nulidade por ausência de fundamentação / omissão do acórdão, inclusive do julgamento dos embargos de declaração) — e o acórdão, na leitura da equipe, está de fato claro e fundamentado?</p>
+        <p class="qhelp">Se sim, esse parágrafo entra no despacho, antes da fundamentação do óbice que incidir a seguir — exceto se a Súmula 735/STF acabar incidindo: nesse caso a Marcella pediu para ignorar o 489/1.022 por completo.</p>
+        <div class="choices">
+          <button type="button" class="choice-btn" data-v="sim">Sim, alega 489/1.022 e o acórdão está bem fundamentado</button>
+          <button type="button" class="choice-btn" data-v="nao">Não é o caso / não alega isso</button>
+        </div>
+        ${backRow()}
+      </div>`;
+    wireChoices('art489_1022', (v) => {
+      art489Aplicavel = (v === 'sim');
+      record('art489_1022', 'Alega violação infundada aos arts. 489/1.022, CPC?', v === 'sim' ? 'Sim (parágrafo incluído no despacho, exceto se incidir a Súmula 735)' : 'Não');
+      if(v === 'sim'){
+        // Bia (11/09/2026, 2ª rodada): se já ficou estabelecido em ponto ANTERIOR do roteiro (ex.: na
+        // pergunta de tema/repetitivos, "há outra tese") que o recurso tem múltiplas teses, não faz
+        // sentido perguntar de novo aqui "é o único fundamento?" — já se sabe que não é. Pula direto,
+        // como se tivesse respondido "não" (sem pedir rótulo, igual sempre para o 489/1.022).
+        if(multiplasTesesConfirmado) return resumirAposArt489();
+        return goTo('art489_tese_unica');
+      }
+      return resumirAposArt489();
+    });
+    wireBack();
+  }
+
+  // Pergunta específica pro 489/1.022 (não passa por empilharCascata como os demais óbices — continua
+  // sendo tratado como modificador cumulativo, ver montarStandalone/montarComEmenta/finalizarCascata):
+  // às vezes o recurso é só sobre isso (Bia: "as vezes o resp é só sobre isso").
+  function renderArt489TeseUnica(){
+    activeEl.innerHTML = `
+      ${stepperHTML()}
+      ${materiaTag()}
+      <div class="qcard">
+        <p class="qtext">A nulidade por violação aos artigos 489 e 1.022 do CPC é o único fundamento do recurso, ou há outra(s) tese(s)/fundamento(s) também sustentados?</p>
+        <p class="qhelp">Às vezes o recurso é só sobre isso — se for, o roteiro já pode encerrar por aqui (pula direto pro efeito suspensivo).</p>
+        <div class="choices">
+          <button type="button" class="choice-btn sim" data-v="sim">É o único fundamento do recurso</button>
+          <button type="button" class="choice-btn nao" data-v="nao">Há outra(s) tese(s)/fundamento(s) também</button>
+        </div>
+        ${backRow()}
+      </div>`;
+    wireChoices('art489_tese_unica', (v) => {
+      record('art489_tese_unica', 'A nulidade dos arts. 489/1.022 é o único fundamento do recurso?', v === 'sim' ? 'Sim' : 'Não');
+      if(v === 'sim') return goTo('efeito_suspensivo');
+      // Bia (11/09/2026): não precisa perguntar "em qual tese" aqui — a própria nulidade dos 489/1.022 já
+      // é a descrição da tese, não precisa de rótulo adicional. Segue como modificador cumulativo de
+      // sempre (art489Aplicavel), sem entrar no mecanismo de rótulo "Quanto à tese X,". Mas registra que
+      // o recurso tem múltiplas teses, para os pontos seguintes do roteiro não perguntarem de novo.
+      multiplasTesesConfirmado = true;
+      return resumirAposArt489();
+    });
+    wireBack();
+  }
+
+  // Perguntas genéricas "é tese única?" / "em qual tese incide?" reaproveitadas por todos os óbices de
+  // mérito (matéria constitucional, dissídio, súmula 126, norma infralegal, fundamento inatacado,
+  // prequestionamento, reexame de prova, súmula 83) — ver perguntarTeseUnica.
+  function renderTeseUnicaPonto(){
+    activeEl.innerHTML = `
+      ${stepperHTML()}
+      ${materiaTag()}
+      <div class="qcard">
+        <p class="qtext">Essa é a única tese/fundamento sustentado no recurso?</p>
+        <p class="qhelp">Se sim, o roteiro já pode encerrar por aqui (pula direto pro efeito suspensivo, sem checar os óbices restantes). Se não, diga rapidamente qual tese esse ponto resolve, e o roteiro continua checando as demais.</p>
+        <div class="choices">
+          <button type="button" class="choice-btn sim" data-v="sim">Sim, é a única tese/fundamento</button>
+          <button type="button" class="choice-btn nao" data-v="nao">Não, há outra(s) tese(s)</button>
+        </div>
+        ${backRow()}
+      </div>`;
+    wireChoices('tese_unica_ponto', (v) => {
+      record('tese_unica_ponto', 'É a única tese/fundamento do recurso?', v === 'sim' ? 'Sim' : 'Não');
+      if(v === 'sim'){
+        empilharCascata(teseUnicaPendingEntry);
+        teseUnicaPendingEntry = null; teseUnicaPendingNext = null;
+        return goTo('efeito_suspensivo');
+      }
+      multiplasTesesConfirmado = true;
+      return goTo('tese_unica_label');
+    });
+    wireBack();
+  }
+  function renderTeseUnicaLabel(){
+    activeEl.innerHTML = `
+      ${stepperHTML()}
+      ${materiaTag()}
+      <div class="qcard">
+        <p class="qtext">Em qual tese esse ponto incide? Descreva brevemente.</p>
+        <p class="qhelp">Esse texto entra no despacho identificando a tese (ex.: "tese de que houve invasão de domicílio").</p>
+        <textarea id="ta-tese-label" rows="2" placeholder="Ex.: tese de que houve invasão de domicílio" style="width:100%; font-family:'Helvetica Neue',Arial,sans-serif; font-size:13.5px; padding:10px; border:1px solid var(--line); border-radius:7px; resize:vertical;"></textarea>
+        <div class="choices" style="margin-top:12px;">
+          <button type="button" class="choice-btn sim" id="tese-label-continue">Continuar</button>
+        </div>
+        ${backRow()}
+      </div>`;
+    document.getElementById('tese-label-continue').addEventListener('click', () => {
+      const label = document.getElementById('ta-tese-label').value.trim();
+      record('tese_unica_label', 'Tese em que esse ponto incide', label || '(em branco)');
+      if(label) teseUnicaPendingEntry.teseLabel = label;
+      empilharCascata(teseUnicaPendingEntry);
+      const nextFn = teseUnicaPendingNext;
+      teseUnicaPendingEntry = null; teseUnicaPendingNext = null;
+      return nextFn();
     });
     wireBack();
   }
@@ -1100,10 +1270,10 @@
     wireChoices('contrarrazoes', (v) => {
       contrarrazoes = v;
       record('contrarrazoes', 'Houve contrarrazões?', v === 'sim' ? 'Sim' : 'Não');
-      // Versão B: ementa/tese/CR são coletadas uma única vez, DEPOIS de já ter passado por todas as
-      // teses e seus óbices marcados (não intercaladas, como na Versão A) — daqui só falta o efeito
-      // suspensivo antes de montar o despacho final.
-      return goTo('efeito_suspensivo');
+      // ementa/tese/CR já coletadas — agora seguimos para os óbices que precisam de decisão completa
+      // (prequestionamento, súmula 283, súmula 5/7/279), e só depois para a pesquisa de súmula 83.
+      const firstFragment = FRAGMENT_CHAIN.length ? FRAGMENT_CHAIN[0] : null;
+      return firstFragment !== null ? goTo('sumula_' + firstFragment) : goTo('pesquisa_stj');
     });
     wireBack();
   }
@@ -1111,16 +1281,31 @@
   // ---- pendências ligadas a um achado (armazenadas para montar o despacho quando finalmente fechamos) ----
   let pendingFinish = null; // {type, title, detail, sumulaBox, texto, crossRef, ignoraArt489}
 
-  // Versão B (11/09/2026, pedido de Bia: "seria mais rápido em múltiplas teses"): só os 2 óbices que são
-  // barreiras processuais absolutas (inesgotamento de instância / Súmula 281, e recurso contra decisão
-  // liminar / Súmula 735) continuam sendo perguntados aqui, globalmente, ANTES da lista de teses — eles
-  // encerram o recurso inteiro de plano, independentemente de qual tese está em jogo, então não fazem
-  // sentido dentro do checklist por tese. Todos os demais óbices (matéria constitucional, 489/1.022,
-  // dissídio ideológico, fundamento inatacado/283, súmula 126, reexame de prova, norma infralegal,
-  // prequestionamento, súmula 83) viraram itens do checklist de cada tese — ver renderTeseChecklist.
   function renderSumulaStep(idxStr){
-    const idx = parseInt(idxStr, 10); // 0 = inesgotamento, 1 = liminar
+    const idx = parseInt(idxStr, 10);
     const step = SUMULA_SEQUENCE[idx];
+    if(!step){ return goTo('pesquisa_stj'); }
+    if(step.subBranch === 'prequestionamento'){
+      activeEl.innerHTML = `
+        ${stepperHTML()}
+        ${materiaTag()}
+        <div class="qcard">
+          <p class="qtext">${step.pergunta}</p>
+          <p class="qhelp">${step.ajuda}</p>
+          <div class="choices">
+            <button type="button" class="choice-btn sim" data-v="sim">Sim</button>
+            <button type="button" class="choice-btn nao" data-v="nao">Não</button>
+          </div>
+          ${backRow()}
+        </div>`;
+      wireChoices('sumula_' + idx, (v) => {
+        record('sumula_' + idx, step.pergunta, v === 'sim' ? 'Sim' : 'Não');
+        if(v === 'nao'){ prequestionamentoContext = 'roteiro'; return goTo('prequestionamento_variante'); }
+        return goToNextObice(idx);
+      });
+      wireBack();
+      return;
+    }
     activeEl.innerHTML = `
       ${stepperHTML()}
       ${materiaTag()}
@@ -1141,9 +1326,63 @@
           return goTo('excecao_liminar');
         }
         const titulo = step.simSumula ? step.simSumula.titulo : step.id;
-        return finishStandalone('danger', 'Sugerir inadmissão — ' + titulo, 'Hipótese de incidência, por analogia, da súmula abaixo. Este é o texto pronto usado pela própria equipe — confira o enquadramento antes de enviar.', step.simSumula, step.texto, step.crossRef, step.ignoraArt489);
+        if(!step.cascata){
+          // kill switch (só inesgotamento hoje): barreira processual absoluta, finaliza na hora, como
+          // sempre — não entra na cascata de pontos combináveis.
+          return finishStandalone('danger', 'Sugerir inadmissão — ' + titulo, 'Hipótese de incidência, por analogia, da súmula abaixo. Este é o texto pronto usado pela própria equipe — confira o enquadramento antes de enviar.', step.simSumula, step.texto, step.crossRef, step.ignoraArt489);
+        }
+        if(step.checaCotejoAnalitico && alinea !== 'a'){
+          pendingFinish = { step, titulo };
+          return goTo('cotejo_analitico');
+        }
+        // pedido de Bia (14/09/2026, 5ª rodada): a nota da alínea "c" bloqueada não entra mais aqui, colada
+        // no corpo do 1º óbice que a dispara — agora é montada 1 única vez, como bloco próprio no FINAL da
+        // decisão (ver finalizarCascata). `addendaLegacy` continua igual (só usado no despacho de PONTO
+        // ÚNICO sem rótulo de tese, que nunca combina com outros pontos — visualmente já ficava "no final"
+        // por ser o único conteúdo do despacho, então não precisa mudar).
+        const addenda = [];
+        if(step.checaAlineaCBloqueada && alinea !== 'a'){ addenda.push(ALINEA_C_BLOQUEADA); }
+        let entry;
+        if(step.kind === 'standalone'){
+          entry = { id: step.id, priority: PRIORIDADE_CASCATA[step.id], titulo, sumula: step.simSumula, crossRef: step.crossRef, kind: 'standalone', textoLegacy: step.texto, addendaLegacy: [], ignoraArt489: !!step.ignoraArt489, corpo: extrairCorpoPuro(step.texto, step.fechoProprio) };
+        } else {
+          entry = { id: step.id, priority: PRIORIDADE_CASCATA[step.id], titulo, sumula: step.simSumula, crossRef: step.crossRef, kind: 'fragment', textoLegacy: step.texto, addendaLegacy: addenda, ignoraArt489: !!step.ignoraArt489, corpo: step.texto };
+        }
+        return perguntarTeseUnica(entry, () => goToNextObice(idx));
       }
-      return idx === 0 ? goTo('sumula_1') : goTo('precedente_favoravel');
+      return goToNextObice(idx);
+    });
+    wireBack();
+  }
+
+  function renderCotejoAnalitico(){
+    activeEl.innerHTML = `
+      ${stepperHTML()}
+      ${materiaTag()}
+      <div class="qcard">
+        <p class="qtext">O recurso também invoca a alínea "c" — a parte fez a demonstração analítica (cotejo), com transcrição de trechos divergentes dos acórdãos confrontados, indicando com precisão os dispositivos de lei federal supostamente interpretados de forma divergente?</p>
+        <p class="qhelp">Se não fez o cotejo analítico exigido pelo art. 1.029, § 1º, CPC e art. 255 do RISTJ, um parágrafo adicional entra no despacho.</p>
+        <div class="choices">
+          <button type="button" class="choice-btn sim" data-v="sim">Sim, fez o cotejo analítico corretamente</button>
+          <button type="button" class="choice-btn nao" data-v="nao">Não fez o cotejo analítico</button>
+        </div>
+        ${backRow()}
+      </div>`;
+    wireChoices('cotejo_analitico', (v) => {
+      record('cotejo_analitico', 'Fez o cotejo analítico exigido para a alínea "c"?', v === 'sim' ? 'Sim' : 'Não');
+      const pf = pendingFinish;
+      pendingFinish = null;
+      if(!pf) return;
+      const step = pf.step;
+      const semCotejo = v === 'nao';
+      const textoLegacy = semCotejo ? (step.texto + '\n\n' + COTEJO_ANALITICO) : step.texto;
+      // Na cascata, o parágrafo do cotejo (quando faltou) entra logo após o corpo puro do óbice, antes do
+      // fecho compartilhado — diferente do despacho isolado de sempre, em que ele entra depois do próprio
+      // fecho do modelo (preservado acima, em textoLegacy, para o caso de 1 ponto só).
+      let corpo = extrairCorpoPuro(step.texto, step.fechoProprio);
+      if(semCotejo) corpo += '\n\n' + COTEJO_ANALITICO;
+      const entry = { id: step.id, priority: PRIORIDADE_CASCATA[step.id], titulo: pf.titulo, sumula: step.simSumula, crossRef: step.crossRef, kind: 'standalone', textoLegacy, addendaLegacy: [], ignoraArt489: !!step.ignoraArt489, corpo };
+      return perguntarTeseUnica(entry, () => goToNextObice(SUMULA_SEQUENCE.indexOf(step)));
     });
     wireBack();
   }
@@ -1164,7 +1403,7 @@
     wireChoices('excecao_liminar', (v) => {
       record('excecao_liminar', 'Exceção (busca e apreensão / requisito único do art. 300 CPC) aplicável?', v === 'sim' ? 'Sim' : 'Não');
       if(v === 'sim'){
-        return goTo('precedente_favoravel');
+        return goToNextObice(SUMULA_SEQUENCE.findIndex(s => s.id === 'liminar'));
       }
       const step = SUMULA_SEQUENCE.find(s => s.id === 'liminar');
       return finishStandalone('danger', 'Sugerir inadmissão — ' + step.simSumula.titulo, 'Hipótese de incidência, por analogia, da súmula abaixo. Este é o texto pronto usado pela própria equipe — confira o enquadramento antes de enviar.', step.simSumula, step.texto, step.crossRef, step.ignoraArt489);
@@ -1188,10 +1427,17 @@
       btn.addEventListener('click', () => {
         const pv = PREQUESTIONAMENTO_VARIANTES.find(p => p.id === btn.dataset.pv);
         record('prequestionamento_variante', 'Variante de ausência de prequestionamento', pv.label);
-        // Este passo só é usado pelo motor de tema/repetitivos (tema_prequestionamento) na Versão B — no
-        // checklist por tese, a escolha da variante é feita inline, sem passar por esta tela (ver
-        // renderTeseChecklist). Ementa/tese/CR nunca foram coletadas neste fluxo — envelope enxuto de sempre.
-        return finishFragmento('danger', 'Sugerir inadmissão — Ausência de prequestionamento', 'Hipótese de incidência, por analogia, da súmula abaixo. Confira o enquadramento antes de enviar.', pv.sumula, pv.texto, null, false, []);
+        // Chegando pelo motor de múltiplas teses (tema_prequestionamento), ementa/tese/CR nunca foram
+        // coletadas nesse fluxo — mantém o envelope enxuto de sempre, sem entrar na cascata (motor
+        // separado, inalterado).
+        if(prequestionamentoContext === 'tema'){
+          return finishFragmento('danger', 'Sugerir inadmissão — Ausência de prequestionamento', 'Hipótese de incidência, por analogia, da súmula abaixo. Confira o enquadramento antes de enviar.', pv.sumula, pv.texto, null, false, []);
+        }
+        // Chegando pela sequência normal de óbices, ementa/tese/CR já foram coletadas — registra o ponto
+        // na cascata e continua pelos óbices restantes (súmula 83), em vez de finalizar na hora.
+        const idxPreq = SUMULA_SEQUENCE.findIndex(s => s.id === 'prequestionamento');
+        const entry = { id: 'prequestionamento', priority: PRIORIDADE_CASCATA.prequestionamento, titulo: 'Ausência de prequestionamento', sumula: pv.sumula, crossRef: null, kind: 'fragment', textoLegacy: pv.texto, addendaLegacy: [], ignoraArt489: false, corpo: pv.texto };
+        return perguntarTeseUnica(entry, () => goToNextObice(idxPreq));
       });
     });
     wireBack();
@@ -1210,38 +1456,49 @@
         <a href="https://portal.stf.jus.br/" target="_blank" rel="noopener" class="btn">Portal STF ↗</a>
       </div>
     </div>`;
-  // Versão B: a busca de precedente FAVORÁVEL (que tornaria o recurso admissível) deixou de ser uma opção
-  // dentro da pergunta de súmula 83 (essa virou item do checklist por tese, com a caixa de pesquisa aberta
-  // — pedido de Bia 11/09/2026: "na 83 deixaria a caixa de pesquisa de juris aberta") e virou uma pergunta
-  // global única, ANTES da lista de teses: se há precedente favorável a QUALQUER tese, isso torna o
-  // recurso admissível como um todo, então não faz sentido tratar tese por tese.
-  function renderPrecedenteFavoravel(){
+  let pesquisaStjBranch = null; // 'coincidente' | 'favoravel' — qual opção levou à tela de colar o precedente
+
+  function renderPesquisaStj(){
     activeEl.innerHTML = `
       ${stepperHTML()}
       ${materiaTag()}
       <div class="qcard">
-        <p class="qtext">Antes de entrar nas teses do recurso: foi localizado precedente do STJ/STF FAVORÁVEL a alguma delas — tornando o recurso admissível (e não apenas obstado)?</p>
+        <p class="qtext">Nenhum dos óbices anteriores incide. Pesquisando a jurisprudência do STJ sobre o tema: há precedente coincidente com o acórdão recorrido, ou favorável à tese do recurso?</p>
         ${PESQUISA_LINKS_HTML}
         <div class="choices">
-          <button type="button" class="choice-btn nao" data-v="sim">Sim, há precedente favorável (recurso admissível)</button>
-          <button type="button" class="choice-btn sim" data-v="nao">Não — seguir para as teses normalmente</button>
+          <button type="button" class="choice-btn nao" data-v="coincidente">Sim, há precedente coincidente com o acórdão (Súmula 83)</button>
+          <button type="button" class="choice-btn nao" data-v="favoravel">Há precedente FAVORÁVEL à tese (recurso seria admissível)</button>
+          <button type="button" class="choice-btn sim" data-v="nao">Não encontrei precedente</button>
         </div>
         ${backRow()}
       </div>`;
-    wireChoices('precedente_favoravel', (v) => {
-      record('precedente_favoravel', 'Precedente favorável localizado antes das teses?', v === 'sim' ? 'Sim' : 'Não');
-      if(v === 'sim') return goTo('precedente_favoravel_colar');
-      return goTo('lista_teses');
+    wireChoices('pesquisa_stj', (v) => {
+      if(v === 'coincidente' || v === 'favoravel'){
+        record('pesquisa_stj', 'Precedente do STJ pesquisado', v === 'coincidente' ? 'Coincidente com o acórdão (Súmula 83)' : 'Favorável à tese (recurso admissível)');
+        pesquisaStjBranch = v;
+        return goTo('pesquisa_stj_colar');
+      }
+      record('pesquisa_stj', 'Precedente do STJ pesquisado', 'Não encontrado');
+      // Se algum ponto já foi registrado na cascata ao longo do roteiro (ex.: dissídio ideológico incidiu
+      // antes e o roteiro continuou), não descarta esse ponto no esqueleto genérico — pergunta o efeito
+      // suspensivo e finaliza combinando o que já foi registrado. Só cai no esqueleto genérico de sempre
+      // quando NENHUM ponto incidiu em todo o roteiro.
+      if(cascataPontos.length > 0 || art489Aplicavel){
+        return goTo('efeito_suspensivo');
+      }
+      // ementa/tese/CR já foram coletadas antes dos óbices de decisão completa — não pergunta de novo.
+      return finishEsqueleto('ok', 'Nenhum modelo pronto identificado — despacho montado do zero', 'Nenhum dos óbices com modelo pronto incidiu, e não há precedente do STJ localizado. Complete a fundamentação no colchete abaixo de acordo com os modelos da equipe, ou avise a Marcella se não houver modelo específico. Lembrete: não há modelo próprio da equipe para recurso extraordinário — avise a Marcella também nesse caso.');
     });
     wireBack();
   }
 
-  function renderPrecedenteFavoravelColar(){
+  function renderPesquisaStjColar(){
+    const favoravel = pesquisaStjBranch === 'favoravel';
     activeEl.innerHTML = `
       ${stepperHTML()}
       ${materiaTag()}
       <div class="qcard">
-        <p class="qtext">Cole a ementa (ou o trecho relevante) do precedente favorável à tese, para citar no despacho de admissão.</p>
+        <p class="qtext">Cole a ementa (ou o trecho relevante) do precedente ${favoravel ? 'favorável à tese, para citar no despacho de admissão' : 'coincidente com o acórdão recorrido, para citar no despacho'}.</p>
         <p class="qhelp">A conferência da jurisprudência colada aqui é de responsabilidade exclusiva do assessor.</p>
         <textarea id="ta-pesquisa-stj" rows="6" style="width:100%; font-family:'IBM Plex Mono',monospace; font-size:12.5px; padding:10px; border:1px solid var(--line); border-radius:8px; resize:vertical;" placeholder="Cole aqui a ementa/trecho do precedente"></textarea>
         <button type="button" class="choice-btn sim" id="pesquisa-stj-continue" style="margin-top:10px;">Continuar</button>
@@ -1249,195 +1506,28 @@
       </div>`;
     document.getElementById('pesquisa-stj-continue').addEventListener('click', () => {
       const texto = document.getElementById('ta-pesquisa-stj').value.trim();
-      record('precedente_favoravel_colar', 'Precedente favorável colado', texto ? '(texto colado — ver despacho)' : '(nenhum texto colado)');
-      return finishAdmissaoPrecedente(texto);
-    });
-    wireBack();
-  }
-
-  // ---- lista de teses (Versão B): coleta só o rótulo de cada tese — os óbices de cada uma são marcados
-  // na tela seguinte (renderTeseChecklist), uma tese de cada vez.
-  function renderListaTeses(){
-    activeEl.innerHTML = `
-      ${stepperHTML()}
-      ${materiaTag()}
-      <div class="qcard">
-        <p class="qtext">Quais são as teses/fundamentos sustentados no recurso?</p>
-        <p class="qhelp">Liste cada tese separadamente — na próxima tela você marca quais óbices incidem em cada uma. O que você escrever aqui também vira o resumo das teses no cabeçalho do despacho ("...asseverando a parte recorrente, em síntese, que ___"), então pode ser um nome curto ("nulidade do acórdão") ou uma frase mais completa, como preferir — não vai perguntar de novo mais adiante.</p>
-        ${aiHelperBoxHTML('teses-ia', 'Se preferir, peça apoio de IA para ler a peça recursal e listar as teses/fundamentos sustentados (você confere e ajusta aqui antes de continuar).')}
-        <div id="teses-rows"></div>
-        <button type="button" class="btn" id="tese-add-btn" style="margin-top:8px;">+ Adicionar tese</button>
-        <p id="teses-erro" class="qhelp" style="color:var(--danger-text); display:none;">Informe ao menos uma tese, ou use "pular" abaixo.</p>
-        <label for="ta-artigos" class="qhelp" style="display:block; margin-top:14px;">Quais artigos de lei federal foram apontados como violados? (opcional)</label>
-        <input type="text" id="ta-artigos" placeholder="Ex.: arts. 186 e 927 do Código Civil" value="${escapeHTML(artigosViolados)}" style="width:100%; font-family:'Helvetica Neue',Arial,sans-serif; font-size:13.5px; padding:8px 10px; border:1px solid var(--line); border-radius:7px;">
-        <div class="choices" style="margin-top:16px;">
-          <button type="button" class="choice-btn sim" id="teses-continuar-btn">Continuar</button>
-        </div>
-        <p class="qhelp" style="margin-top:10px;"><button type="button" id="teses-pular-btn" style="background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;padding:0;font:inherit;">Este recurso não precisa desse detalhamento por tese — pular</button></p>
-        ${backRow()}
-      </div>`;
-    const rowsEl = document.getElementById('teses-rows');
-    function addRow(value){
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex; gap:6px; margin-bottom:6px;';
-      row.innerHTML = `<input type="text" class="tese-label-input" placeholder="Nome curto da tese" style="flex:1; font-family:'Helvetica Neue',Arial,sans-serif; font-size:13.5px; padding:8px 10px; border:1px solid var(--line); border-radius:7px;"><button type="button" class="tese-remove-btn btn" style="padding:8px 12px;">Remover</button>`;
-      row.querySelector('.tese-label-input').value = value || '';
-      row.querySelector('.tese-remove-btn').addEventListener('click', () => row.remove());
-      rowsEl.appendChild(row);
-    }
-    // pré-preenche com as teses já listadas (se ela voltou pra esta tela)
-    if(teses.length){ teses.forEach(t => addRow(t.label)); } else { addRow(''); }
-    document.getElementById('tese-add-btn').addEventListener('click', () => addRow(''));
-    wireAiHelperBox('teses-ia', AI_PROMPT_TEMA);
-    document.getElementById('teses-continuar-btn').addEventListener('click', () => {
-      const labels = Array.from(rowsEl.querySelectorAll('.tese-label-input')).map(i => i.value.trim()).filter(Boolean);
-      if(labels.length === 0){ document.getElementById('teses-erro').style.display = 'block'; return; }
-      teses = labels.map(l => ({ label: l }));
-      teseChecklistPontos = [];
-      // pedido de Bia (11/09/2026): não pergunta mais o resumo das teses separadamente — o que ela
-      // escreve aqui, ao enumerar as teses pela 1ª vez, já alimenta o parágrafo do cabeçalho do despacho.
-      // Lista em português corrido ("tese a, tese b e tese c"), não só rótulos colados com ";" — vira o
-      // fallback determinístico de resumoNucleo, que a IA pode deixar mais fluida em seguida.
-      tesesText = formatarListaPt(labels);
-      resumoNucleo = tesesText;
-      artigosViolados = document.getElementById('ta-artigos').value.trim();
-      tentarResumoSinteticoIA(labels);
-      record('lista_teses', 'Teses do recurso', teses.map(t => t.label).join(' | ') + (artigosViolados ? ' | artigos: ' + artigosViolados : ''));
-      return goTo('tese_checklist_0');
-    });
-    document.getElementById('teses-pular-btn').addEventListener('click', () => {
-      teses = []; teseChecklistPontos = [];
-      record('lista_teses', 'Teses do recurso', '(pulado — sem detalhamento por tese)');
-      return goTo('ementa');
-    });
-    wireBack();
-  }
-
-  // ---- checklist de óbices por tese (Versão B, pedido de Bia 11/09/2026): mostra CHECKLIST_ITENS como
-  // caixas de marcar, reaproveitando os MESMOS textos/súmulas prontos de sempre (SUMULA_SEQUENCE,
-  // ART489_CORE, MATERIA_CONSTITUCIONAL_TEXTO etc.) — só muda a interação, de perguntas sequenciais pra
-  // marcação múltipla. Cada item marcado vira uma entry com `.teseLabel = tese.label`, empilhada em
-  // `teseChecklistPontos` na ordem fixa de CHECKLIST_ITENS.
-  function renderTeseChecklist(idx){
-    const tese = teses[idx];
-    if(!tese){ return goTo('ementa'); }
-    const mostraCotejo = alinea !== 'a';
-    const itensHTML = CHECKLIST_ITENS.map(item => {
-      let extraHTML = '';
-      if(item.extra === 'cotejo' && mostraCotejo){
-        extraHTML = `<div class="tese-item-extra" data-extra-for="${item.id}" style="display:none; margin:8px 0 0 26px;">
-          <label style="font-family:'Helvetica Neue',Arial,sans-serif; font-size:12.5px; display:flex; gap:6px; align-items:flex-start;">
-            <input type="checkbox" class="tese-cotejo-checkbox" style="margin-top:2px;">
-            <span>O recurso também invoca a alínea "c" e NÃO fez o cotejo analítico exigido (art. 1.029, §1º, CPC) — acrescenta o parágrafo adicional.</span>
-          </label>
-        </div>`;
-      } else if(item.extra === 'prequestionamento'){
-        extraHTML = `<div class="tese-item-extra" data-extra-for="${item.id}" style="display:none; margin:8px 0 0 26px;">
-          ${PREQUESTIONAMENTO_VARIANTES.map((pv, i) => `<label style="font-family:'Helvetica Neue',Arial,sans-serif; font-size:12.5px; display:flex; gap:6px; align-items:flex-start; margin-bottom:4px;"><input type="radio" name="preq-variante-${idx}" class="tese-preq-radio" value="${pv.id}" ${i === 0 ? 'checked' : ''} style="margin-top:2px;"><span>${escapeHTML(pv.label)}</span></label>`).join('')}
-        </div>`;
-      } else if(item.extra === 'fundamento'){
-        // pedido de Bia (14/09/2026, 5ª rodada): preencher o "XXXXXXX" (o fundamento que o recurso deixou
-        // de impugnar) direto aqui, no momento de marcar o item — em vez de deixar o placeholder pra
-        // completar depois no despacho pronto.
-        extraHTML = `<div class="tese-item-extra" data-extra-for="${item.id}" style="display:none; margin:8px 0 0 26px;">
-          <textarea class="tese-fundamento-input" rows="2" style="width:100%; font-family:'Helvetica Neue',Arial,sans-serif; font-size:12.5px; padding:8px; border:1px solid var(--line); border-radius:7px; resize:vertical;" placeholder="Descreva brevemente o fundamento do acórdão que o recurso deixou de impugnar (ex.: a preliminar de ilegitimidade passiva)"></textarea>
-        </div>`;
-      } else if(item.extra === 'sumula83'){
-        extraHTML = `<div class="tese-item-extra" data-extra-for="${item.id}" style="display:none; margin:8px 0 0 26px;">
-          ${PESQUISA_LINKS_HTML}
-          <textarea class="tese-sumula83-textarea" rows="4" style="width:100%; font-family:'IBM Plex Mono',monospace; font-size:12px; padding:8px; border:1px solid var(--line); border-radius:7px; resize:vertical;" placeholder="Cole aqui o trecho/ementa do precedente coincidente (opcional)"></textarea>
-        </div>`;
+      record('pesquisa_stj_colar', favoravel ? 'Precedente favorável colado' : 'Precedente coincidente colado', texto ? '(texto colado — ver despacho)' : '(nenhum texto colado)');
+      if(favoravel){
+        return finishAdmissaoPrecedente(texto);
       }
-      return `<div class="tese-checklist-item" style="border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px;">
-        <label style="font-family:'Helvetica Neue',Arial,sans-serif; font-size:13.5px; display:flex; gap:8px; align-items:flex-start; font-weight:600;">
-          <input type="checkbox" class="tese-item-checkbox" data-item="${item.id}" style="margin-top:3px;">
-          <span>${escapeHTML(item.label)}</span>
-        </label>
-        <p class="qhelp" style="margin:4px 0 0 26px;">${escapeHTML(item.ajuda)}</p>
-        ${extraHTML}
-      </div>`;
-    }).join('');
-    activeEl.innerHTML = `
-      ${stepperHTML()}
-      ${materiaTag()}
-      <div class="qcard">
-        <p class="qnum">Tese ${idx + 1} de ${teses.length}</p>
-        <p class="qtext">Tese: ${escapeHTML(tese.label)}</p>
-        <p class="qhelp">Marque os óbices que incidem NESTA tese. Pode marcar mais de um, ou nenhum se nenhum óbice se aplicar aqui.</p>
-        ${itensHTML}
-        <div class="choices" style="margin-top:10px;">
-          <button type="button" class="choice-btn sim" id="tese-checklist-continuar-btn">${idx + 1 < teses.length ? 'Continuar para a próxima tese' : 'Continuar'}</button>
-        </div>
-        ${backRow()}
-      </div>`;
-    activeEl.querySelectorAll('.tese-item-checkbox').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const extra = activeEl.querySelector(`.tese-item-extra[data-extra-for="${cb.dataset.item}"]`);
-        if(extra) extra.style.display = cb.checked ? 'block' : 'none';
-      });
-    });
-    document.getElementById('tese-checklist-continuar-btn').addEventListener('click', () => {
-      const marcados = [];
-      activeEl.querySelectorAll('.tese-item-checkbox').forEach(cb => {
-        if(!cb.checked) return;
-        const id = cb.dataset.item;
-        let entry = null;
-        if(id === 'materia_constitucional'){
-          entry = { id, titulo: 'Matéria constitucional — incompetência do STJ', sumula: null, kind: 'fragment', corpo: MATERIA_CONSTITUCIONAL_TEXTO };
-        } else if(id === 'art489'){
-          entry = { id, titulo: null, sumula: null, kind: 'fragment', corpo: ART489_CORE };
-        } else if(id === 'dissidio_ideologico'){
-          const step = findSeqStep('dissidio_ideologico');
-          const cotejoCb = activeEl.querySelector('.tese-cotejo-checkbox');
-          const semCotejo = mostraCotejo && cotejoCb && cotejoCb.checked;
-          let corpo = extrairCorpoPuro(step.texto, step.fechoProprio);
-          if(semCotejo) corpo += '\n\n' + COTEJO_ANALITICO;
-          entry = { id, titulo: step.simSumula.titulo, sumula: step.simSumula, kind: 'standalone', corpo };
-        } else if(id === 'fundamento_inatacado'){
-          const step = findSeqStep('fundamento_inatacado');
-          // pedido de Bia (14/09/2026, 5ª rodada): caixa pra preencher o fundamento direto ao marcar o
-          // item; se não preencher, mantém o XXXXXXX visível (igual sempre foi) pra completar depois.
-          const inputEl = activeEl.querySelector('.tese-fundamento-input');
-          const preenchido = inputEl ? inputEl.value.trim() : '';
-          const fundamentoTexto = preenchido || XXXXXXX;
-          entry = { id, titulo: step.simSumula.titulo, sumula: step.simSumula, kind: 'fragment', corpo: step.texto.replace(XXXXXXX, fundamentoTexto), fundamentoTexto };
-        } else if(id === 'sumula_126'){
-          const step = findSeqStep('sumula_126');
-          entry = { id, titulo: step.simSumula.titulo, sumula: step.simSumula, kind: 'standalone', corpo: extrairCorpoPuro(step.texto, step.fechoProprio) };
-        } else if(id === 'reexame_prova'){
-          const step = findSeqStep('reexame_prova');
-          // pedido de Bia (14/09/2026, 5ª rodada): a nota da alínea "c" bloqueada não entra mais colada
-          // aqui — vira bloco próprio, 1 única vez, no FINAL da decisão (ver finalizarChecklist).
-          entry = { id, titulo: step.simSumula.titulo, sumula: step.simSumula, kind: 'fragment', corpo: step.texto };
-        } else if(id === 'norma_infralegal'){
-          const step = findSeqStep('norma_infralegal');
-          entry = { id, titulo: step.simSumula.titulo, sumula: step.simSumula, kind: 'standalone', corpo: extrairCorpoPuro(step.texto, step.fechoProprio) };
-        } else if(id === 'prequestionamento'){
-          const radio = activeEl.querySelector('.tese-preq-radio:checked');
-          const pv = PREQUESTIONAMENTO_VARIANTES.find(p => p.id === (radio ? radio.value : PREQUESTIONAMENTO_VARIANTES[0].id));
-          entry = { id, titulo: 'Ausência de prequestionamento', sumula: pv.sumula, kind: 'fragment', corpo: pv.texto };
-        } else if(id === 'sumula_83'){
-          const ta = activeEl.querySelector('.tese-sumula83-textarea');
-          const colado = ta ? ta.value.trim() : '';
-          // pedido de Bia (14/09/2026, 5ª rodada): a nota da alínea "c" bloqueada não entra mais colada
-          // aqui — vira bloco próprio, 1 única vez, no FINAL da decisão (ver finalizarChecklist). O trecho
-          // colado do precedente continua entrando aqui, normalmente (é legítimo variar por tese).
-          let corpo = SUMULA_83_TEXTO;
-          if(colado) corpo += '\n\n' + colado;
-          entry = { id, titulo: 'Conformidade com jurisprudência dominante do STJ', sumula: SUMULA_83, kind: 'fragment', corpo };
-        }
-        if(entry){ entry.teseLabel = tese.label; marcados.push(entry); }
-      });
-      // pedido de Bia (14/09/2026, "nosso padrão", item 6): dentro de uma MESMA tese com 2+
-      // fundamentações, a ordem tem que ser reexame de prova -> súmula 83 -> "outros" — mas a ordem fixa
-      // do checklist (CHECKLIST_ITENS) sempre lista "fundamento não impugnado" antes de "reexame de
-      // prova", então sem este reordenamento a 283 saía antes do reexame quando os dois são marcados na
-      // mesma tese. Só reordena DENTRO desta tese — a ordem entre teses diferentes não muda.
-      const SUBORDEM_TESE = { reexame_prova: 0, sumula_83: 1 };
-      marcados.sort((a, b) => (SUBORDEM_TESE.hasOwnProperty(a.id) ? SUBORDEM_TESE[a.id] : 2) - (SUBORDEM_TESE.hasOwnProperty(b.id) ? SUBORDEM_TESE[b.id] : 2));
-      teseChecklistPontos.push(...marcados);
-      record('tese_checklist_' + idx, 'Óbices marcados na tese "' + tese.label + '"', marcados.length ? marcados.map(m => m.id).join(', ') : '(nenhum)');
-      return idx + 1 < teses.length ? goTo('tese_checklist_' + (idx + 1)) : goTo('ementa');
+      const addenda = [];
+      if(texto) addenda.push(texto);
+      // pedido de Bia (14/09/2026, 5ª rodada): a nota da alínea "c" bloqueada não entra mais colada aqui —
+      // vira bloco próprio no FINAL da decisão (ver finalizarCascata). `addendaLegacy` (só usada no
+      // despacho de ponto único sem rótulo de tese) continua incluindo a nota, porque ali ela já é
+      // visualmente "o final" por ser o único conteúdo do despacho.
+      const addendaLegacy = addenda.slice();
+      if(alinea !== 'a') addendaLegacy.push(ALINEA_C_BLOQUEADA);
+      // CORREÇÃO (10/09/2026, tarde): súmula 83 é INADMISSÃO (art. 1.030, V), não negativa de seguimento.
+      // Bia corrigiu meu entendimento anterior: negativa de seguimento (art. 1.030, I, "nego") é EXCLUSIVA
+      // de TEMA — recurso julgado sob o rito de repetitivos/repercussão geral. Fora de tema, é sempre
+      // inadmissão ("inadmito") — inclusive súmula 83. O fecho compartilhado da cascata (CLOSER) já segue
+      // essa regra (nunca CLOSER_NEGATIVA).
+      // Registra o ponto na cascata (em vez de finalizar na hora) e pergunta o efeito suspensivo antes de
+      // montar o despacho final — cobre tanto o caso "só súmula 83" quanto o caso combinado com pontos
+      // já registrados antes no roteiro (ex.: dissídio ideológico).
+      const entry = { id: 'sumula_83', priority: PRIORIDADE_CASCATA.sumula_83, titulo: 'Conformidade com jurisprudência dominante do STJ', sumula: SUMULA_83, crossRef: null, kind: 'fragment', textoLegacy: SUMULA_83_TEXTO, addendaLegacy: addendaLegacy, ignoraArt489: false, corpo: addenda.length ? (SUMULA_83_TEXTO + '\n\n' + addenda.join('\n\n')) : SUMULA_83_TEXTO };
+      return perguntarTeseUnica(entry, () => goTo('efeito_suspensivo'));
     });
     wireBack();
   }
@@ -1458,76 +1548,125 @@
     wireChoices('efeito_suspensivo', (v) => {
       efeitoSuspensivoAplicavel = (v === 'sim');
       record('efeito_suspensivo', 'Há pedido de efeito suspensivo pendente?', v === 'sim' ? 'Sim (registrado como prejudicado no despacho)' : 'Não');
-      return finalizarChecklist();
+      return finalizarCascata();
     });
     wireBack();
   }
 
-  // ---- montagem final da Versão B: todo ponto marcado no checklist de alguma tese já vem com
-  // `.teseLabel` (o rótulo da tese a que pertence) — diferente da Versão A, aqui NUNCA existe o caso
-  // "despacho pronto de sempre, sem rótulo": o checklist por tese sempre atribui um rótulo. Os pontos são
-  // concatenados na ordem em que aparecem em `teseChecklistPontos` (ordem das teses, e dentro de cada
-  // tese, a ordem fixa do checklist — ver CHECKLIST_ITENS), com cabeçalho compartilhado e fecho único.
-  function finalizarChecklist(){
-    const pontos = teseChecklistPontos.slice();
-    if(pontos.length === 0 && !efeitoSuspensivoAplicavel){
-      return finishEsqueleto('ok', 'Nenhum modelo pronto identificado — despacho montado do zero', 'Nenhum óbice foi marcado em nenhuma tese, e não há precedente do STJ localizado. Complete a fundamentação no colchete abaixo de acordo com os modelos da equipe, ou avise a Marcella se não houver modelo específico.');
+  // ---- montagem final da cascata: decide, a partir de tudo o que foi registrado ao longo do roteiro
+  // (cascataPontos, art489Aplicavel, efeitoSuspensivoAplicavel), qual despacho gerar. 3 desfechos
+  // possíveis: (1) nada incidiu -> esqueleto genérico (não deveria ser alcançado por este caminho — fica
+  // só como salvaguarda, pois os pontos de chamada já verificam cascataPontos.length antes); (2) 1 único
+  // ponto, sem 489/efeito suspensivo combinado -> preserva EXATAMENTE o despacho pronto de sempre
+  // (finishStandalone/finishComEmenta, igual a antes desta funcionalidade existir); (3) 2+ pontos, ou 1
+  // ponto + modificador -> cabeçalho compartilhado + pontos em ordem de prioridade fixa, com as transições
+  // fixas de Bia (Inicialmente/Ademais/Lado outro/Noutro passo/Além disso — "Por fim," reservado ao efeito
+  // suspensivo, sempre o último) + fecho único (nunca CLOSER_NEGATIVA — súmula 83 não é negativa de
+  // seguimento, e nenhum destes pontos é TEMA).
+  function finalizarCascata(){
+    // realPontos = gatilhos DE VERDADE (matéria constitucional, dissídio, 283, 126, reexame de prova,
+    // norma infralegal, prequestionamento, súmula 83) — sem contar 489/1.022 e efeito suspensivo, que são
+    // MODIFICADORES (só aparecem combinados com pelo menos 1 gatilho real).
+    const realPontos = cascataPontos.slice();
+    // Só cai no esqueleto genérico quando NADA foi registrado (nem óbice de mérito, nem 489/1.022, nem
+    // efeito suspensivo) — corrige o caso "o recurso é só sobre 489/1.022" (Bia 11/09/2026: "às vezes o
+    // REsp é só sobre isso"), que antes caía aqui incorretamente e ignorava o art489Aplicavel.
+    if(realPontos.length === 0 && !art489Aplicavel && !efeitoSuspensivoAplicavel){
+      return finishEsqueleto('ok', 'Nenhum modelo pronto identificado — despacho montado do zero', 'Nenhum dos óbices com modelo pronto incidiu, e não há precedente do STJ localizado. Complete a fundamentação no colchete abaixo de acordo com os modelos da equipe, ou avise a Marcella se não houver modelo específico.');
     }
+    // Caso preservado: exatamente 1 gatilho real, sem efeito suspensivo combinado e sem rótulo de tese
+    // (o rótulo só existe quando o triador respondeu "não é tese única" — nesse caso precisamos da
+    // montagem com conector "Quanto à tese X," abaixo, não do despacho pronto de sempre) — usa o despacho
+    // pronto de sempre (finishStandalone/finishComEmenta), que já trata o 489/1.022 internamente
+    // (montarStandalone/montarComEmenta leem art489Aplicavel direto) — byte a byte igual a antes desta
+    // funcionalidade existir, MESMO quando 489/1.022 também se aplica.
+    if(realPontos.length === 1 && !efeitoSuspensivoAplicavel && !realPontos[0].teseLabel && !art489TeseLabel){
+      const p = realPontos[0];
+      if(p.kind === 'standalone'){
+        return finishStandalone('danger', 'Sugerir inadmissão — ' + p.titulo, 'Hipótese de incidência, por analogia, da súmula abaixo. Este é o texto pronto usado pela própria equipe — confira o enquadramento antes de enviar.', p.sumula, p.textoLegacy, p.crossRef, p.ignoraArt489);
+      }
+      return finishComEmenta('danger', 'Sugerir inadmissão — ' + p.titulo, 'Hipótese de incidência, por analogia, da súmula abaixo. Confira o enquadramento antes de enviar.', p.sumula, p.textoLegacy, p.crossRef, p.ignoraArt489, p.addendaLegacy);
+    }
+    // 2+ gatilhos reais, OU 1 gatilho + efeito suspensivo combinado: cabeçalho compartilhado + pontos
+    // concatenados com as transições fixas + fecho único. Ordem dos pontos (Bia 11/09/2026: "pode usar a
+    // ordem dos argumentos"): a ordem em que ela respondeu/apontou os pontos ao longo do roteiro (ordem de
+    // inserção em cascataPontos) — não mais uma prioridade jurídica fixa. 489/1.022 é a exceção: como é
+    // sempre perguntado logo após a matéria constitucional (bem no início do roteiro), entra logo ali —
+    // depois da matéria constitucional, se houver, ou em 1º lugar. Efeito suspensivo continua sempre por
+    // último ("Por fim,"), já que é perguntado ao final do roteiro e prejudicado pela inadmissão como um
+    // todo, não por uma tese específica.
+    let pontos = realPontos.slice();
     // pedido de Bia (14/09/2026, 5ª rodada): a nota da alínea "c" bloqueada não fica mais colada no corpo
     // do 1º óbice que a dispara — vira bloco próprio, 1 única vez, no FINAL da decisão (depois de todos os
     // blocos de tese, antes só do eventual parágrafo de efeito suspensivo e do fecho).
     if(alinea !== 'a' && pontos.some(p => p.id === 'reexame_prova' || p.id === 'sumula_83')){
-      pontos.push({ id: 'alinea_c_nota', titulo: null, sumula: null, kind: 'fragment', corpo: ALINEA_C_BLOQUEADA, teseLabel: null });
+      pontos.push({ id: 'alinea_c_nota', priority: null, titulo: null, sumula: null, crossRef: null, kind: 'fragment', textoLegacy: ALINEA_C_BLOQUEADA, addendaLegacy: [], ignoraArt489: false, corpo: ALINEA_C_BLOQUEADA });
     }
     if(efeitoSuspensivoAplicavel){
-      pontos.push({ id: 'efeito_suspensivo', titulo: null, sumula: null, kind: 'fragment', corpo: EFEITO_SUSPENSIVO_TEXTO, teseLabel: null });
+      pontos.push({ id: 'efeito_suspensivo', priority: PRIORIDADE_CASCATA.efeito_suspensivo, titulo: null, sumula: null, crossRef: null, kind: 'fragment', textoLegacy: EFEITO_SUSPENSIVO_TEXTO, addendaLegacy: [], ignoraArt489: false, corpo: EFEITO_SUSPENSIVO_TEXTO });
     }
-    // pedido de Bia (11/09/2026): quando o MESMO óbice (mesmo id, mesmo texto) incide em 2+ teses —
-    // ex.: "matéria constitucional" marcada nas teses z e a, com o texto padrão idêntico nas duas —
-    // mescla num único bloco citando todas as teses, em vez de repetir o texto padrão uma vez por tese.
-    // Só mescla quando o CORPO é idêntico (id + texto); óbices cujo texto varia por tese (dissídio com/sem
-    // cotejo, variante de prequestionamento, súmula 83 com trecho colado diferente) continuam separados,
-    // porque o texto de cada um é, de fato, diferente. EXCEÇÃO (14/09/2026, 5ª rodada): fundamento
-    // inatacado (283) SEMPRE mescla entre teses, mesmo com XXXXXXX preenchido de forma diferente em cada
-    // uma — pedido de Bia: "não é para repetir também não" — em vez de repetir o parágrafo+citação inteiros
-    // por tese, um parágrafo único listando os vários fundamentos não impugnados (ver
-    // construirCorpoFundamentoMerged), com a citação da Súmula 283 aparecendo 1 vez só.
+    if(art489Aplicavel){
+      const ponto489 = { id: 'art489', priority: PRIORIDADE_CASCATA.art489, titulo: null, sumula: null, crossRef: null, kind: 'fragment', textoLegacy: ART489_CORE, addendaLegacy: [], ignoraArt489: false, corpo: ART489_CORE, teseLabel: art489TeseLabel || null };
+      const insertAt = (pontos[0] && pontos[0].id === 'materia_constitucional') ? 1 : 0;
+      pontos.splice(insertAt, 0, ponto489);
+    }
+    // pedido de Bia (14/09/2026, "nosso padrão"): (a) mescla pontos com o MESMO id+corpo entre teses
+    // diferentes — mesma regra determinística já usada na Versão B, só entra quando o texto do óbice é
+    // byte a byte igual nas duas teses; (b) agrupa as entradas da MESMA tese (ou conjunto de teses
+    // mescladas) para ficarem seguidas no despacho, na ordem em que a tese apareceu pela 1ª vez no
+    // roteiro — em vez de intercaladas conforme a ordem bruta em que as perguntas foram respondidas.
+    // Pontos sem rótulo de tese (matéria/489 sem tese, efeito suspensivo) não entram na mesclagem/
+    // agrupamento, mantêm a posição e o conector posicional de sempre.
     const mesclados = [];
     const idxPorChave = new Map();
     pontos.forEach((p) => {
-      if(p.id === 'efeito_suspensivo' || p.id === 'alinea_c_nota'){ mesclados.push(Object.assign({}, p, { teseLabels: null })); return; }
-      const chave = p.id === 'fundamento_inatacado' ? 'fundamento_inatacado' : (p.id + '||' + p.corpo);
+      if(!p.teseLabel){ mesclados.push(Object.assign({}, p, { teseLabels: null })); return; }
+      const chave = p.id + '||' + p.corpo;
       if(idxPorChave.has(chave)){
-        const alvo = mesclados[idxPorChave.get(chave)];
-        alvo.teseLabels.push(p.teseLabel);
-        if(p.id === 'fundamento_inatacado') alvo.fundamentos.push(p.fundamentoTexto);
+        mesclados[idxPorChave.get(chave)].teseLabels.push(p.teseLabel);
       } else {
         idxPorChave.set(chave, mesclados.length);
-        const novo = Object.assign({}, p, { teseLabels: [p.teseLabel] });
-        if(p.id === 'fundamento_inatacado') novo.fundamentos = [p.fundamentoTexto];
-        mesclados.push(novo);
+        mesclados.push(Object.assign({}, p, { teseLabels: [p.teseLabel] }));
       }
     });
-    // Conector de cada bloco: o 1º bloco de cada (conjunto de) tese(s) recebe "Quanto à tese X," ou
-    // "Quanto às teses X e Y," quando mesclado; blocos SEGUINTES do MESMO conjunto de teses (quando ela
-    // tem mais de um óbice marcado) recebem um conectivo de continuidade, sem repetir o rótulo. Efeito
-    // suspensivo sempre "Por fim," (não pertence a nenhuma tese específica). `escolhas` guarda, pra cada
-    // bloco com mais de uma abertura possível, as opções completas (pedido de Bia 14/09/2026, confirmado:
-    // deixar a IA ESCOLHER entre elas — ver tentarEscolherConectivosChecklistIA); a opção [0] de cada
-    // lista é sempre a determinística de sempre, já usada em `partes` como fallback.
+    const primeiraAparicao = new Map();
+    mesclados.forEach((p, i) => {
+      const chave = p.teseLabels ? p.teseLabels.join('|') : ('__solo_' + i);
+      if(!primeiraAparicao.has(chave)) primeiraAparicao.set(chave, i);
+    });
+    // pedido de Bia (14/09/2026, "nosso padrão", item 6): dentro de uma MESMA tese com 2+ fundamentações,
+    // a ordem tem que ser reexame de prova -> súmula 83 -> "outros" (283, 126 etc.) — mas o roteiro sempre
+    // PERGUNTA a 283 antes do reexame de prova (ordem fixa das perguntas), então sem este 2º critério de
+    // desempate a 283 saía antes do reexame quando os dois incidem na mesma tese. `subOrdemTese` só entra
+    // em jogo como desempate DENTRO do mesmo grupo de tese (primeiraAparicao igual); entre teses
+    // diferentes, continua valendo só a ordem de 1ª aparição de cada uma.
+    const SUBORDEM_TESE = { reexame_prova: 0, sumula_83: 1 };
+    function subOrdemTese(p){ return SUBORDEM_TESE.hasOwnProperty(p.id) ? SUBORDEM_TESE[p.id] : 2; }
+    pontos = mesclados.slice().sort((a, b) => {
+      const chaveA = a.teseLabels ? a.teseLabels.join('|') : ('__solo_' + mesclados.indexOf(a));
+      const chaveB = b.teseLabels ? b.teseLabels.join('|') : ('__solo_' + mesclados.indexOf(b));
+      const diff = primeiraAparicao.get(chaveA) - primeiraAparicao.get(chaveB);
+      return diff !== 0 ? diff : (subOrdemTese(a) - subOrdemTese(b));
+    });
+    // Conector de cada bloco: quando o ponto tem rótulo(s) de tese, o 1º bloco de cada (conjunto de)
+    // tese(s) recebe "Quanto à [tese]," ou "Quanto à [tese] e à [tese],"  quando mesclado (rotuloQuantoA);
+    // blocos SEGUINTES da MESMA tese (quando ela tem mais de um óbice marcado) recebem um conectivo de
+    // continuidade, sem repetir o rótulo — mesmo padrão já usado na Versão B. Pontos sem rótulo de tese
+    // seguem a transição fixa posicional de sempre (Inicialmente/Ademais/Lado outro/Noutro passo/Além
+    // disso — "Por fim," pro efeito suspensivo). "Inicialmente," só no bloco que é LITERALMENTE o 1º do
+    // documento — nunca no meio. `escolhas` guarda, pra cada bloco com mais de uma abertura possível, as
+    // opções completas (pedido de Bia 14/09/2026, confirmado: deixar a IA ESCOLHER entre elas — ver
+    // tentarEscolherConectivosCascataIA); a opção [0] de cada lista é sempre a determinística de sempre,
+    // já usada em `partes` como fallback.
+    const CONECTORES_NAO_INICIAL = ['Ademais,', 'Lado outro,', 'Noutro passo,', 'Além disso,'];
     const CONECTORES_CONTINUACAO = ['Ademais,', 'Além disso,', 'De outro lado,'];
-    let ultimaChaveTeses = null;
+    let contadorConector = 0;
     let contadorContinuacao = 0;
+    let ultimaChaveTeses = null;
     const partes = [];
     const escolhas = [];
-    mesclados.forEach((p) => {
-      let corpo = p.corpo;
-      // fundamento inatacado (283) mesclado em 2+ teses: monta 1 parágrafo único listando os vários
-      // fundamentos não impugnados, em vez de repetir o parágrafo+citação por tese (pedido de Bia
-      // 14/09/2026, 5ª rodada — ver construirCorpoFundamentoMerged).
-      if(p.id === 'fundamento_inatacado' && p.fundamentos && p.fundamentos.length > 1){
-        corpo = construirCorpoFundamentoMerged(p.fundamentos);
-      }
+    pontos.forEach((p, i) => {
+      const corpo = p.corpo;
       const primeiraMinuscula = corpo.charAt(0).toLowerCase() + corpo.slice(1);
       if(p.id === 'efeito_suspensivo'){
         ultimaChaveTeses = null;
@@ -1541,32 +1680,45 @@
         escolhas.push(null);
         return;
       }
-      const chaveTeses = p.teseLabels.join('|');
-      if(chaveTeses === ultimaChaveTeses){
-        const opcoes = CONECTORES_CONTINUACAO.map(c => c + ' ' + primeiraMinuscula);
-        const conector = CONECTORES_CONTINUACAO[contadorContinuacao++ % CONECTORES_CONTINUACAO.length];
-        partes.push(conector + ' ' + primeiraMinuscula);
-        escolhas.push(opcoes);
+      if(p.teseLabels){
+        const chaveTeses = p.teseLabels.join('|');
+        if(chaveTeses === ultimaChaveTeses){
+          const opcoes = CONECTORES_CONTINUACAO.map(c => c + ' ' + primeiraMinuscula);
+          const conector = CONECTORES_CONTINUACAO[contadorContinuacao++ % CONECTORES_CONTINUACAO.length];
+          partes.push(conector + ' ' + primeiraMinuscula);
+          escolhas.push(opcoes);
+          return;
+        }
+        ultimaChaveTeses = chaveTeses;
+        contadorContinuacao = 0;
+        const padrao = rotuloQuantoA(p.teseLabels) + ', ' + primeiraMinuscula;
+        partes.push(padrao);
+        // variação só disponível quando a tese NÃO foi mesclada (rótulo único) — pedido dela pra quando há
+        // muitas teses com fundamentações diferentes.
+        escolhas.push(p.teseLabels.length === 1 ? [padrao, 'No tocante à tese de ' + p.teseLabels[0] + ', observa-se que ' + primeiraMinuscula] : null);
         return;
       }
-      ultimaChaveTeses = chaveTeses;
-      contadorContinuacao = 0;
-      const padrao = rotuloQuantoA(p.teseLabels) + ', ' + primeiraMinuscula;
-      partes.push(padrao);
-      // variação só disponível quando a tese NÃO foi mesclada (rótulo único) — pedido dela pra quando há
-      // muitas teses com fundamentações diferentes.
-      escolhas.push(p.teseLabels.length === 1 ? [padrao, 'No tocante à tese de ' + p.teseLabels[0] + ', observa-se que ' + primeiraMinuscula] : null);
+      ultimaChaveTeses = null;
+      if(i === 0){
+        partes.push('Inicialmente, ' + primeiraMinuscula);
+        escolhas.push(null);
+        return;
+      }
+      const opcoes = CONECTORES_NAO_INICIAL.map(c => c + ' ' + primeiraMinuscula);
+      const conector = CONECTORES_NAO_INICIAL[contadorConector++ % CONECTORES_NAO_INICIAL.length];
+      partes.push(conector + ' ' + primeiraMinuscula);
+      escolhas.push(opcoes);
     });
     const cabecalho = buildEsqueletoHeader();
-    // pedido de Bia (14/09/2026, 2ª rodada de testes): fecho indefere o efeito suspensivo explicitamente
-    // quando houver pedido pendente, em vez do CLOSER de sempre.
+    // pedido de Bia (14/09/2026, 2ª rodada de testes): quando há efeito suspensivo pendente, o fecho tem
+    // que indeferir esse pedido explicitamente (CLOSER_COM_EFEITO_SUSPENSIVO), não só o CLOSER de sempre.
     const fechamento = efeitoSuspensivoAplicavel ? CLOSER_COM_EFEITO_SUSPENSIVO : CLOSER;
     const doc = cabecalho + partes.join('\n\n') + '\n\n' + fechamento;
-    const sumulaBoxes = mesclados.filter(p => p.sumula).map(p => p.sumula);
+    const sumulaBoxes = pontos.filter(p => p.sumula).map(p => p.sumula);
     final = {
       type: 'danger',
-      title: 'Sugerir inadmissão — múltiplas teses combinadas',
-      detail: 'O despacho abaixo combina, por tese, os óbices marcados no checklist — fecho único (art. 1.030, V, CPC — inadmissão; nunca negativa de seguimento fora de tema). Confira o enquadramento de cada ponto antes de enviar.',
+      title: 'Sugerir inadmissão — múltiplos pontos combinados',
+      detail: 'Mais de um ponto/óbice incide ao mesmo tempo — o despacho abaixo os combina num único texto, com fecho único (art. 1.030, V, CPC — inadmissão; nunca negativa de seguimento fora de tema). Confira o enquadramento de cada ponto antes de enviar.',
       sumulaBox: null,
       sumulaBoxes: sumulaBoxes.length ? sumulaBoxes : null,
       crossRef: null,
@@ -1577,10 +1729,10 @@
       blocos: [cabecalho.trim(), ...partes, fechamento]
     };
     currentStep = null; render();
-    // pedido de Bia (14/09/2026, confirmado): a IA ESCOLHE entre as aberturas/conectores já aprovados
-    // (nunca insere texto livre como o tentarConectivosIA fazia aqui antes) — ver
-    // tentarEscolherConectivosChecklistIA.
-    tentarEscolherConectivosChecklistIA(partes, escolhas, cabecalho, fechamento);
+    // pedido de Bia (14/09/2026, confirmado): dentro da cascata, a IA ESCOLHE entre as aberturas/conectores
+    // já aprovados (nunca insere texto livre como o tentarConectivosIA fazia aqui antes) — ver
+    // tentarEscolherConectivosCascataIA.
+    tentarEscolherConectivosCascataIA(partes, escolhas, cabecalho, fechamento);
   }
 
   function wireChoices(step, handler){
@@ -1665,7 +1817,7 @@
       });
     }
     document.getElementById('restart-btn').addEventListener('click', () => {
-      history = []; final = null; materia = null; edsStatus = null; alinea = null; ementaText = ''; tesesText = ''; contrarrazoes = null; art489Aplicavel = false; art489TeseLabel = null; pendingFinish = null; temaSelecionado = null; temaItemAParteNota = null; prequestionamentoContext = 'roteiro'; materiaConstitucionalAplicavel = false; efeitoSuspensivoAplicavel = false; teseUnicaPendingEntry = null; teseUnicaPendingNext = null; multiplasTesesConfirmado = false; teses = []; teseChecklistPontos = [];
+      history = []; final = null; materia = null; edsStatus = null; alinea = null; ementaText = ''; tesesText = ''; contrarrazoes = null; art489Aplicavel = false; art489TeseLabel = null; pendingFinish = null; temaSelecionado = null; temaItemAParteNota = null; prequestionamentoContext = 'roteiro'; pesquisaStjBranch = null; cascataPontos = []; materiaConstitucionalAplicavel = false; efeitoSuspensivoAplicavel = false; teseUnicaPendingEntry = null; teseUnicaPendingNext = null; multiplasTesesConfirmado = false;
       currentStep = 'materia'; render();
       window.scrollTo({top:0, behavior:'smooth'});
     });
@@ -1675,8 +1827,6 @@
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
   }
 
-  // junta uma lista de rótulos em português corrido ("a", "a e b", "a, b e c") — usado no resumo do
-  // cabeçalho e no rótulo "Quanto à(s) tese(s)..." quando o mesmo óbice é mesclado entre teses.
   function formatarListaPt(labels){
     if(!labels || labels.length === 0) return '';
     if(labels.length === 1) return labels[0];
@@ -1684,10 +1834,12 @@
   }
 
   // "Quanto à tese de X," (singular) ou "Quanto às teses de X, de Y e de Z," (mesclado entre teses) —
-  // pedido de Bia (14/09/2026, 2ª rodada de testes): o rótulo é texto livre digitado pelo assessor, pode
-  // ser masculino ("cerceamento de defesa") — "Quanto à [rótulo]," ficava com concordância errada nesses
-  // casos. Corrigido inserindo sempre a palavra "tese(s)" (sempre feminina) entre o conector e o rótulo,
-  // com "de" (nunca precisa de crase) em vez de crase direta no rótulo.
+  // pedido de Bia (14/09/2026, 2ª rodada de testes): o rótulo da tese é texto livre digitado pelo
+  // assessor, então pode ser masculino ("cerceamento de defesa") ou feminino ("nulidade") — "Quanto à
+  // [rótulo]," ficava com concordância errada nos casos masculinos ("Quanto à cerceamento de defesa,").
+  // Corrigido inserindo sempre a palavra "tese(s)" (sempre feminina) entre o conector e o rótulo, com
+  // "de" (nunca precisa de crase) em vez de crase direta no rótulo — funciona pra qualquer gênero, sem
+  // precisar adivinhar a concordância do que foi digitado.
   function rotuloQuantoA(labels){
     if(labels.length === 1) return 'Quanto à tese de ' + labels[0];
     const comDe = labels.map(l => 'de ' + l);
